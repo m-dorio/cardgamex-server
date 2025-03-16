@@ -8,12 +8,12 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:5173", // React frontend URL
+    origin: "http://localhost:5173",
     methods: ["GET", "POST"],
   },
 });
 
-let rooms = {}; // Store game rooms
+let rooms = {};
 
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
@@ -23,105 +23,115 @@ io.on("connection", (socket) => {
       rooms[roomId] = {
         players: {},
         turn: null,
-        ready: false,
         playAgainVotes: 0,
         diceRolls: {},
-        scores: {}, // ✅ Track scores
+        scores: {},
       };
-
-      rooms[roomId].players[socket.id] = { ...playerData, ready: false };
-      rooms[roomId].scores[socket.id] = { wins: 0, losses: 0 }; // ✅ Initialize score
-
-      console.log(`Room created: ${roomId} by ${socket.id}`);
-    }
-
-    socket.join(roomId);
-    io.to(roomId).emit("update-players", rooms[roomId].players);
-    io.to(roomId).emit("update-scores", rooms[roomId].scores); // ✅ Send scores to both players
-  });
-
-  socket.on("join-game", (roomId, playerData) => {
-    if (!rooms[roomId]) {
-      socket.emit("error-message", "Room does not exist.");
-      return;
-    }
-
-    if (Object.keys(rooms[roomId].players).length >= 2) {
-      socket.emit("error-message", "Room is full.");
-      return;
     }
 
     rooms[roomId].players[socket.id] = { ...playerData, ready: false };
-    rooms[roomId].scores[socket.id] = { wins: 0, losses: 0 }; // ✅ Initialize score
+    rooms[roomId].scores[socket.id] = rooms[roomId].scores[socket.id] || {
+      wins: 0,
+      losses: 0,
+    };
 
     socket.join(roomId);
-    console.log(`Player ${socket.id} joined room ${roomId}`);
-
     io.to(roomId).emit("update-players", rooms[roomId].players);
-    io.to(roomId).emit("update-scores", rooms[roomId].scores); // ✅ Send updated scores
+    io.to(roomId).emit("update-scores", rooms[roomId].scores);
+  });
+
+  socket.on("join-game", (roomId, playerData) => {
+    if (!rooms[roomId] || Object.keys(rooms[roomId].players).length >= 2)
+      return;
+
+    rooms[roomId].players[socket.id] = { ...playerData, ready: false };
+    rooms[roomId].scores[socket.id] = rooms[roomId].scores[socket.id] || {
+      wins: 0,
+      losses: 0,
+    };
+
+    socket.join(roomId);
+    io.to(roomId).emit("update-players", rooms[roomId].players);
+    io.to(roomId).emit("update-scores", rooms[roomId].scores);
   });
 
   socket.on("player-ready", (roomId) => {
-    if (rooms[roomId]) {
-      rooms[roomId].players[socket.id].ready = true;
-      io.to(roomId).emit("player-ready-update", rooms[roomId].players);
+    if (!rooms[roomId]) return;
 
-      if (Object.values(rooms[roomId].players).every((p) => p.ready)) {
-        const playerIds = Object.keys(rooms[roomId].players);
+    rooms[roomId].players[socket.id].ready = true;
+    io.to(roomId).emit("player-ready-update", rooms[roomId].players);
 
-        // 🎲 Roll dice (1-6) for both players
-        rooms[roomId].diceRolls[playerIds[0]] = Math.floor(Math.random() * 6) + 1;
-        rooms[roomId].diceRolls[playerIds[1]] = Math.floor(Math.random() * 6) + 1;
+    if (Object.values(rooms[roomId].players).every((p) => p.ready)) {
+      const playerIds = Object.keys(rooms[roomId].players);
+      rooms[roomId].diceRolls[playerIds[0]] = Math.floor(Math.random() * 6) + 1;
+      rooms[roomId].diceRolls[playerIds[1]] = Math.floor(Math.random() * 6) + 1;
 
-        const firstTurn =
-          rooms[roomId].diceRolls[playerIds[0]] >= rooms[roomId].diceRolls[playerIds[1]]
-            ? playerIds[0]
-            : playerIds[1];
+      const firstTurn =
+        rooms[roomId].diceRolls[playerIds[0]] >=
+        rooms[roomId].diceRolls[playerIds[1]]
+          ? playerIds[0]
+          : playerIds[1];
 
-        rooms[roomId].turn = null;
+      rooms[roomId].turn = null;
+      io.to(roomId).emit("dice-roll-result", {
+        turn: firstTurn,
+        diceRolls: rooms[roomId].diceRolls,
+      });
 
-        io.to(roomId).emit("dice-roll-result", {
-          turn: firstTurn,
-          diceRolls: rooms[roomId].diceRolls,
-        });
+      setTimeout(() => {
+        rooms[roomId].turn = firstTurn;
+        io.to(roomId).emit("set-turn", firstTurn);
+      }, 2000);
 
-        setTimeout(() => {
-          rooms[roomId].turn = firstTurn;
-          io.to(roomId).emit("set-turn", firstTurn);
-        }, 2000);
-
-        rooms[roomId].players[playerIds[0]].ready = false;
-        rooms[roomId].players[playerIds[1]].ready = false;
-      }
+      Object.values(rooms[roomId].players).forEach(
+        (player) => (player.ready = false)
+      );
     }
   });
 
-  // ✅ Handle Player Attack
   socket.on("attack", ({ roomId, attackerId, damage }) => {
     if (!rooms[roomId] || rooms[roomId].turn !== attackerId) return;
 
-    const opponentId = Object.keys(rooms[roomId].players).find((id) => id !== attackerId);
+    const opponentId = Object.keys(rooms[roomId].players).find(
+      (id) => id !== attackerId
+    );
+    if (!opponentId) return;
 
-    if (opponentId) {
-      io.to(opponentId).emit("receive-attack", { damage });
-      io.to(attackerId).emit("enemy-damaged", { damage });
+    io.to(opponentId).emit("receive-attack", { damage });
+    io.to(attackerId).emit("enemy-damaged", { damage });
 
-      rooms[roomId].turn = opponentId;
-      io.to(roomId).emit("set-turn", opponentId);
-    }
+    rooms[roomId].turn = opponentId;
+    io.to(roomId).emit("set-turn", opponentId);
   });
 
-  // ✅ Update Scores when Game Ends
   socket.on("game-over", ({ roomId, winnerId, loserId }) => {
     if (!rooms[roomId]) return;
 
-    rooms[roomId].scores[winnerId].wins += 1;
-    rooms[roomId].scores[loserId].losses += 1;
+    // ✅ Ensure scores exist for both players
+    if (!rooms[roomId].scores[winnerId]) {
+      rooms[roomId].scores[winnerId] = { wins: 0, losses: 0 };
+    }
+    if (!rooms[roomId].scores[loserId]) {
+      rooms[roomId].scores[loserId] = { wins: 0, losses: 0 };
+    }
 
-    io.to(roomId).emit("update-scores", rooms[roomId].scores); // ✅ Send updated scores
-  });
+    // ✅ Now update wins/losses safely
+    rooms[roomId].scores = {
+      ...rooms[roomId].scores,
+      [winnerId]: {
+        ...rooms[roomId].scores[winnerId],
+        wins: rooms[roomId].scores[winnerId].wins + 1,
+      },
+      [loserId]: {
+        ...rooms[roomId].scores[loserId],
+        losses: rooms[roomId].scores[loserId].losses + 1,
+      },
+    };
 
-  // ✅ Handle Play Again
+    io.to(roomId).emit("update-scores", rooms[roomId].scores);
+});
+;
+
   socket.on("request-play-again", (roomId) => {
     if (rooms[roomId]) {
       rooms[roomId].playAgainVotes += 1;
@@ -129,30 +139,51 @@ io.on("connection", (socket) => {
 
       if (rooms[roomId].playAgainVotes >= 2) {
         rooms[roomId].playAgainVotes = 0;
+
+        // ✅ Preserve scores when resetting the game
+        const previousScores = { ...rooms[roomId].scores };
+
         rooms[roomId].turn = null;
         rooms[roomId].diceRolls = {};
         Object.values(rooms[roomId].players).forEach((player) => {
           player.ready = false;
         });
 
+        rooms[roomId].scores = previousScores; // ✅ Restore previous scores
+
         io.to(roomId).emit("show-ready-button");
         io.to(roomId).emit("update-players", rooms[roomId].players);
-        io.to(roomId).emit("update-scores", rooms[roomId].scores); // ✅ Ensure scores persist
+        io.to(roomId).emit("update-scores", rooms[roomId].scores);
       }
     }
   });
 
+  socket.on("leave-room", (roomId) => {
+    if (rooms[roomId] && rooms[roomId].players[socket.id]) {
+      delete rooms[roomId].players[socket.id];
+      delete rooms[roomId].scores[socket.id];
+
+      io.to(roomId).emit("update-players", rooms[roomId].players);
+      io.to(roomId).emit("update-scores", rooms[roomId].scores);
+      io.to(roomId).emit("player-left");
+
+      if (Object.keys(rooms[roomId].players).length === 0) delete rooms[roomId];
+    }
+    socket.leave(roomId);
+  });
+
   socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
     for (const roomId in rooms) {
       if (rooms[roomId].players[socket.id]) {
         delete rooms[roomId].players[socket.id];
+        delete rooms[roomId].scores[socket.id];
+
         io.to(roomId).emit("update-players", rooms[roomId].players);
+        io.to(roomId).emit("update-scores", rooms[roomId].scores);
         io.to(roomId).emit("player-left");
 
-        if (Object.keys(rooms[roomId].players).length === 0) {
+        if (Object.keys(rooms[roomId].players).length === 0)
           delete rooms[roomId];
-        }
       }
     }
   });
