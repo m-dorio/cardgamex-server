@@ -116,7 +116,6 @@ io.on("connection", (socket) => {
     console.log(`Game over in room ${roomId}. Winner: ${winnerId}, Loser: ${loserId}`);
     if (!rooms[roomId]) return;
 
-    // ✅ Ensure scores exist for both players
     if (!rooms[roomId].scores[winnerId]) {
       rooms[roomId].scores[winnerId] = { wins: 0, losses: 0 };
     }
@@ -124,19 +123,7 @@ io.on("connection", (socket) => {
       rooms[roomId].scores[loserId] = { wins: 0, losses: 0 };
     }
 
-    // ✅ Now update wins/losses safely
-    rooms[roomId].scores = {
-      ...rooms[roomId].scores,
-      [winnerId]: {
-        ...rooms[roomId].scores[winnerId],
-        wins: rooms[roomId].scores[winnerId].wins + 1,
-      },
-      [loserId]: {
-        ...rooms[roomId].scores[loserId],
-        losses: rooms[roomId].scores[loserId].losses + 1,
-      },
-    };
-
+    rooms[roomId].scores[winnerId].wins += 1;
     rooms[roomId].scores[loserId].losses += 1;
 
     io.to(roomId).emit("update-scores", rooms[roomId].scores);
@@ -152,7 +139,6 @@ io.on("connection", (socket) => {
       if (rooms[roomId].playAgainVotes >= 2) {
         rooms[roomId].playAgainVotes = 0;
 
-        // ✅ Preserve scores when resetting the game
         const previousScores = { ...rooms[roomId].scores };
 
         rooms[roomId].turn = null;
@@ -161,7 +147,7 @@ io.on("connection", (socket) => {
           player.ready = false;
         });
 
-        rooms[roomId].scores = previousScores; // ✅ Restore previous scores
+        rooms[roomId].scores = previousScores;
 
         io.to(roomId).emit("show-ready-button");
         io.to(roomId).emit("update-players", rooms[roomId].players);
